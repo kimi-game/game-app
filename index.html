@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <title>星集めゲーム</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Kosugi+Maru&display=swap');
     html, body {
@@ -177,6 +177,7 @@
       gameStarted = true;
       overlay.style.display = 'none';
       // BGM とキャッチ音のロック解除
+      bgmSound.currentTime = 0;
       bgmSound.play().catch(()=>{});
       catchSnd.play()
         .then(()=>{ catchSnd.pause(); catchSnd.currentTime = 0; })
@@ -306,15 +307,18 @@
       if(!gameStarted) return;
       e.preventDefault();
       const t = e.touches[0];
-      touchSX = t.clientX; touchSY = t.clientY;
+      const rect = canvas.getBoundingClientRect();
+      touchSX = t.clientX - rect.left;
+      touchSY = t.clientY - rect.top;
       plSX = player.x; plSY = player.y;
     }, {passive:false});
     canvas.addEventListener('touchmove', e=>{
       if(!gameStarted) return;
       e.preventDefault();
       const t = e.touches[0];
-      const dx = (t.clientX - touchSX) * (canvas.width / window.innerWidth);
-      const dy = (t.clientY - touchSY) * (canvas.height / window.innerHeight);
+      const rect = canvas.getBoundingClientRect();
+      const dx = (t.clientX - rect.left - touchSX) * (canvas.width / rect.width);
+      const dy = (t.clientY - rect.top - touchSY) * (canvas.height / rect.height);
       player.x = Math.max(0, Math.min(canvas.width-player.w, plSX + dx/2));
       player.y = Math.max(0, Math.min(canvas.height-player.h, plSY + dy/2));
     }, {passive:false});
@@ -323,7 +327,9 @@
     startBtn.addEventListener('click', startGame);
     startBtn.addEventListener('touchstart', startGame, {passive:true});
     restart.addEventListener('click', ()=>{
-      initGame(); gameStarted=false; startGame();
+      initGame();
+      gameStarted = false;
+      overlay.style.display = 'flex';
     });
 
     // 初期化

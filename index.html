@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>星集めゲーム</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Kosugi+Maru&display=swap');
+    html, body {
+      margin:0; padding:0; overflow:hidden; height:100vh;
+      background:#000; font-family:'Kosugi Maru',sans-serif;
+    }
+    canvas {
+      display:block; margin:0 auto;
+      background:#001e3c; touch-action:none;
+    }
+    #hud {
+      position:absolute; top:12px; right:16px;
+      color:#00e5ff; text-shadow:0 0 2px #0097a7;
+      font-size:12px; z-index:2; pointer-events:none;
+    }
+    #hud div { margin-bottom:4px; }
+
+    /* スタート画面 */
+    #startOverlay {
+      position:absolute; top:0; left:0; width:100vw; height:100vh;
+      background:rgba(0,0,0,0.4);
+      display:flex; flex-direction:column;
+      justify-content:center; align-items:center; z-index:4;
+    }
+    #startOverlay h1 {
+      color:#fff; font-size:34px; margin:0 0 24px;
+      animation:blink 1s step-end infinite;
+    }
+    #startBtn {
+      font-size:24px; padding:12px 40px;
+      border:none; border-radius:50px;
+      background:#00e5ff; color:#001e3c;
+      cursor:pointer; box-shadow:0 4px 10px rgba(0,0,0,0.3);
+    }
+    #startBtn:hover { background:#00bcd4; }
+    @keyframes blink { 50%{opacity:0;} }
+
+    /* 終了画面 */
+    #endScreen {
+      position:absolute; top:0; left:0; width:100vw; height:100vh;
+      background:rgba(0,0,0,0.6);
+      display:flex; flex-direction:column;
+      justify-content:center; align-items:center;
+      visibility:hidden; color:#fff; z-index:3;
+    }
+    #endScreen h1 { font-size:34px; margin-bottom:16px; }
+    #endScreen p   { font-size:24px; margin-bottom:24px; }
+    #restartBtn {
+      padding:8px 16px; font-size:20px;
+      background:#ff4081; border:none; border-radius:8px;
+      color:#fff; cursor:pointer;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="gameCanvas"></canvas>
+  <div id="hud">
+    <div>残り時間：<span id="time">60.0</span>秒</div>
+    <div>スコア：<span id="score">0</span></div>
+  </div>
+  <div id="startOverlay">
+    <h1>Star catching game</h1>
+    <button id="startBtn">START</button>
+  </div>
+  <div id="endScreen">
+    <h1>タイムアップ！</h1>
+    <p>最終スコア：<span id="finalScore">0</span></p>
+    <button id="restartBtn">もう一度チャレンジ</button>
+  </div>
+
+  <audio id="bgm" src="night.wav" loop></audio>
+  <audio id="catchSound" src="catch.mp3" preload="auto"></audio>
+
+  <script>
+  (function(){
+    const isMobile = /Mobi|Android|iPhone|iPad|iPod/.test(navigator.userAgent);
+    const canvas    = document.getElementById('gameCanvas');
+    const ctx       = canvas.getContext('2d');
+    const hudTime   = document.getElementById('time');
+    const hudScore  = document.getElementById('score');
+    const overlay   = document.getElementById('startOverlay');
+    const startBtn  = document.getElementById('startBtn');
+    const endScr    = document.getElementById('endScreen');
+    const finalSc   = document.getElementById('finalScore');
+    const restart   = document.getElementById('restartBtn');
+    const bgmSound  = document.getElementById('bgm');
+    const catchSnd  = document.getElementById('catchSound');
+
+    bgmSound.volume = 0.4;
+    catchSnd.volume = 0.25;
+
+    // キャンバスサイズ：モバイルは正方形、PCは4:3
+    function resizeCanvas(){
+      if(isMobile){
+        const side = Math.min(window.innerWidth, window.innerHeight);
+        canvas.width = canvas.height = side;
+        canvas.style.width = canvas.style.height = side + 'px';
+      } else {
+        let w = window.innerWidth;
+        let h = w * 3 / 4;
+        if(h > window.innerHeight){
+          h = window.innerHeight;
+          w = h * 4 / 3;
+        }
+        canvas.width  = w;
+        canvas.height = h;
+        canvas.style.width  = w + 'px';
+        canvas.style.height = h + 'px';
+      }
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    let gameStarted  = false;
+    let spawnEnabled = false;
+    let lastTime, timeLeft, score;
+    const clouds    = [], stars = [], particles = [];
+    const playerImg = new Image(); playerImg.src = 'chibi.png';
+    const baseSize  = 144 * 0.7 * (isMobile ? 0.5 : 1);  // CHIBIサイズ
+    const player    = { x:0, y:0, w: baseSize, h: baseSize };
+    const keys      = {};
+    let touchSX, touchSY, plSX, plSY;
+
+    function initGame(){
+      timeLeft = 60; score = 0;
+      hudTime.textContent  = timeLeft.toFixed(1);
+      hudScore.textContent = score;
+      endScr.style.visibility = 'hidden';
+      player.x = 0;
+      player.y = (canvas.height - player.h)/2;
+      clouds.length = stars.length = particles.length = 0;
+      for(let i=0;i<30;i++){
+        clouds.push({
+          x: Math.random()*canvas.width,
+          y: Math.random()*canvas.height,
+          size: 40 + Math.random()*40
+        });
+      }
+      spawnEnabled = false;
+      lastTime     = performance.now();
+    }
+
+    function spawnStar(){
+      const baseOffset = isMobile ? 3 : 6;
+      const offsetCount = isMobile ? baseOffset * 2 : baseOffset;
+      const swayF       = isMobile ? 0.5 : 1;
+      stars.push({
+        x: player.x + player.w * offsetCount,
+        y: Math.random()*(canvas.height-60) + 30,
+        size: 32,
+        sway: (Math.random()*2+1) * swayF,
+        offset: Math.random()*Math.PI*2
+      });
+    }
+
+    function spawnParticles(x,y){
+      const factor = isMobile ? 0.2 : 1;
+      for(let i=0;i<12;i++){
+        particles.push({
+          x, y,
+          vx: (Math.random()*2-1)*200*factor,
+          vy: (Math.random()*-1-0.5)*200*factor,
+          size: (Math.random()*3+2)*factor,
+          life: 0.6
+        });
+      }
+    }
+
+    function startGame(){
+      if(gameStarted) return;
+      gameStarted = true;
+      overlay.style.display = 'none';
+      // BGM とキャッチ音のロック解除
+      bgmSound.play().catch(()=>{});
+      catchSnd.play()
+        .then(()=>{ catchSnd.pause(); catchSnd.currentTime = 0; })
+        .catch(()=>{});
+      // 初期星スポーン数（モバイルなら30%減）
+      const initial = isMobile ? Math.ceil(5*0.7) : 5;
+      for(let i=0;i<initial;i++) spawnStar();
+      // 1秒後から定期スポーン
+      setTimeout(()=>{ spawnEnabled = true; }, 1000);
+      requestAnimationFrame(gameLoop);
+    }
+
+    function update(dt){
+      timeLeft = Math.max(0, timeLeft - dt);
+      hudTime.textContent = timeLeft.toFixed(1);
+      if(timeLeft === 0){
+        finalSc.textContent = score;
+        endScr.style.visibility = 'visible';
+      }
+      clouds.forEach(c=>{
+        c.x -= 50*dt;
+        if(c.x < -c.size) c.x = canvas.width + c.size;
+      });
+      const spawnRate = isMobile ? 0.04 * 0.7 : 0.04;
+      if(gameStarted && spawnEnabled && Math.random() < spawnRate) spawnStar();
+      const starSpeed = isMobile ? 160 * 0.7 : 160;  // ✨速度も30%ダウン
+      stars.forEach(s=>{
+        s.x -= starSpeed * dt;
+        s.screenY = s.y + Math.sin(performance.now()/300 + s.offset) * s.sway;
+      });
+      for(let i=stars.length-1; i>=0; i--){
+        const s = stars[i], sy = s.screenY;
+        if(player.x < s.x+s.size && player.x+player.w > s.x &&
+           player.y < sy+s.size && player.y+player.h > sy){
+          spawnParticles(s.x+s.size/2, sy+s.size/2);
+          stars.splice(i,1);
+          score++; hudScore.textContent = score;
+          catchSnd.currentTime = 0; catchSnd.play();
+        } else if(s.x < -s.size){
+          stars.splice(i,1);
+        }
+      }
+      particles.forEach((p,i)=>{
+        p.life -= dt;
+        if(p.life <= 0){ particles.splice(i,1); return; }
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        p.vy += 300 * dt;
+      });
+      const speed = isMobile ? 80*dt : 200*dt;
+      if(keys['ArrowLeft']||keys['a'])   player.x -= speed;
+      if(keys['ArrowRight']||keys['d'])  player.x += speed;
+      if(keys['ArrowUp']||keys['w'])     player.y -= speed;
+      if(keys['ArrowDown']||keys['s'])   player.y += speed;
+      player.x = Math.max(0, Math.min(canvas.width-player.w, player.x));
+      player.y = Math.max(0, Math.min(canvas.height-player.h, player.y));
+    }
+
+    function draw(){
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      ctx.fillStyle = '#001e3c';
+      ctx.fillRect(0,0,canvas.width,canvas.height);
+
+      // 雲
+      ctx.globalAlpha = 0.3;
+      ctx.fillStyle = '#fff';
+      clouds.forEach(c=>{
+        ctx.font = `${c.size}px serif`;
+        ctx.fillText('☁️', c.x, c.y);
+      });
+      ctx.globalAlpha = 1;
+
+      // 星
+      stars.forEach((s,i)=>{
+        ctx.save();
+        const raw = Math.sin(performance.now()/200 + i);
+        const alpha = 0.5 + 0.5 * raw;
+        ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
+        ctx.fillStyle = '#fff';
+        ctx.font      = `${s.size*0.5}px serif`;
+        ctx.fillText('✨', s.x, s.screenY);
+        ctx.restore();
+      });
+
+      // パーティクル
+      particles.forEach(p=>{
+        ctx.globalAlpha = p.life / 0.6;
+        ctx.fillStyle = '#fff';
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size, 0, Math.PI*2);
+        ctx.fill();
+      });
+      ctx.globalAlpha = 1;
+
+      // CHIBI
+      if(playerImg.complete){
+        ctx.drawImage(playerImg, player.x, player.y, player.w, player.h);
+      }
+    }
+
+    function gameLoop(now){
+      const dt = (now - lastTime) / 1000;
+      lastTime = now;
+      if(gameStarted && timeLeft > 0){
+        update(dt);
+        draw();
+        requestAnimationFrame(gameLoop);
+      }
+    }
+
+    // キー操作
+    window.addEventListener('keydown', e=>{
+      if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','a','d','w','s'].includes(e.key)){
+        e.preventDefault();
+        keys[e.key] = true;
+      }
+    });
+    window.addEventListener('keyup', e=>{
+      if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','a','d','w','s'].includes(e.key)){
+        e.preventDefault();
+        keys[e.key] = false;
+      }
+    });
+
+    // タッチ操作
+    canvas.addEventListener('touchstart', e=>{
+      if(!gameStarted) return;
+      e.preventDefault();
+      const t = e.touches[0];
+      touchSX = t.clientX; touchSY = t.clientY;
+      plSX = player.x; plSY = player.y;
+    }, {passive:false});
+    canvas.addEventListener('touchmove', e=>{
+      if(!gameStarted) return;
+      e.preventDefault();
+      const t = e.touches[0];
+      const dx = (t.clientX - touchSX) * (canvas.width / window.innerWidth);
+      const dy = (t.clientY - touchSY) * (canvas.height / window.innerHeight);
+      player.x = Math.max(0, Math.min(canvas.width-player.w, plSX + dx/2));
+      player.y = Math.max(0, Math.min(canvas.height-player.h, plSY + dy/2));
+    }, {passive:false});
+
+    // ボタン
+    startBtn.addEventListener('click', startGame);
+    startBtn.addEventListener('touchstart', startGame, {passive:true});
+    restart.addEventListener('click', ()=>{
+      initGame(); gameStarted=false; startGame();
+    });
+
+    // 初期化
+    initGame();
+  })();
+  </script>
+</body>
+</html>
+
+
